@@ -164,6 +164,7 @@ plotDistribution(factorReturns(0))
 plotDistribution(factorReturns(1))
 
 # http://stackoverflow.com/questions/6615489/fitting-distributions-goodness-of-fit-p-value-is-it-possible-to-do-this-with/16651524#16651524
+# http://stackoverflow.com/questions/21623717/fit-data-to-all-possible-distributions-and-return-the-best-fit
 
   // Check correlations
 import org.apache.commons.math3.stat.correlation.PearsonsCorrelation
