@@ -163,6 +163,8 @@ def plotDistribution(samples: Array[Double]) {
 plotDistribution(factorReturns(0))
 plotDistribution(factorReturns(1))
 
+# http://stackoverflow.com/questions/6615489/fitting-distributions-goodness-of-fit-p-value-is-it-possible-to-do-this-with/16651524#16651524
+
   // Check correlations
 import org.apache.commons.math3.stat.correlation.PearsonsCorrelation
 val factorCor = new PearsonsCorrelation(factorMat).getCorrelationMatrix().getData()
