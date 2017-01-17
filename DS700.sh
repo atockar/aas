@@ -1,6 +1,6 @@
 ################ Not needed for exam ################
 cd Documents/Knowledge/Training/Cloudera/Advanced\ Analytics\ with\ Spark/
-ssh -i SparkAA.pem hadoop@ec2-13-54-105-39.ap-southeast-2.compute.amazonaws.com
+ssh -i SparkAA.pem hadoop@
 sudo wget http://repos.fedorapeople.org/repos/dchen/apache-maven/epel-apache-maven.repo -O /etc/yum.repos.d/epel-apache-maven.repo
 sudo sed -i s/\$releasever/6/g /etc/yum.repos.d/epel-apache-maven.repo
 sudo yum install -y apache-maven

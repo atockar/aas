@@ -1,5 +1,11 @@
 //// Set up
 
+// Remove logs
+import org.apache.log4j.Logger
+import org.apache.log4j.Level
+// Logger.getLogger("org").setLevel(Level.OFF)
+// Logger.getLogger("akka").setLevel(Level.OFF)
+
 // Read in xml files
 import com.cloudera.datascience.common.XmlInputFormat
 import org.apache.spark.SparkContext
@@ -21,30 +27,38 @@ val raw_xml = medline_raw.take(1)(0)
 import org.apache.spark.rdd._   // added
 val mxml: RDD[Elem] = medline_raw.map(XML.loadString)
 
-//// Q1 ** need to do something about encoding possibly **
+//// Q1
 
-// Map out authors (case sensitive)
-def authorsCS(elem: Elem): Seq[(String)] = {
+// Map out authors
+def authors(elem: Elem): Seq[(String)] = {
  val auth = elem \\ "Author"
- // val valid = auth.filter(n => (n \ "@ValidYN").text == "Y")
- val ln = auth \ "LastName"
- val fn = auth \ "ForeName"
- val nameTup = ln.map(_.text).zip(fn.map(_.text))
- nameTup.map(x=>(x._2 + " " + x._1))
+ auth.map(_.toString)
 }
-val authsCS: RDD[Seq[String]] = mxml.map(authorsCS)
-val fAuthsCS = authsCS.flatMap(x=>x).cache()
+val auths = mxml.map(authors)
 
-// Map out authors (case insensitive)
-def authorsCI(elem: Elem): Seq[(String)] = {
- val auth = elem \\ "Author"
- // val valid = auth.filter(n => (n \ "@ValidYN").text == "Y")
- val ln = auth \ "LastName"
- val fn = auth \ "ForeName"
- val nameTup = ln.map(_.text).zip(fn.map(_.text))
- nameTup.map(x=>(x._2 + " " + x._1).toUpperCase())
+val fullNames = auths.map{ arrList =>
+ arrList.map{ authXml =>
+  val lastNameRegEx = """<LastName>(.*)<.LastName>""".r
+  val lnMatched = lastNameRegEx.findFirstMatchIn(authXml)
+  val lastName = lnMatched match {
+   case Some(m) => m.group(1)
+   case None => " "
+  }
+  val firstNameRegEx = """<ForeName>(.*)<.ForeName>""".r
+  val fnMatched = firstNameRegEx.findFirstMatchIn(authXml)
+  val firstName = fnMatched match {
+   case Some(m) => m.group(1)
+   case None => " "
+  }
+  (lastName,firstName)
+ }
 }
-val authsCI: RDD[Seq[String]] = mxml.map(authorsCI)
+
+// Case sensitive
+val fAuthsCS = fullNames.flatMap(x=>x).cache()
+
+// Case insensitive
+val authsCI = fullNames.map(arrList => arrList.map(x=>(x._1.toUpperCase(),x._2.toUpperCase())))
 val fAuthsCI = authsCI.flatMap(x=>x).cache()
 
 // Count distinct
@@ -67,8 +81,8 @@ fAuthsCS.distinct.saveAsTextFile("check/authsCS")
 val authPairs = authsCI.flatMap(_.sorted.combinations(2))
 
 // Count and distribution
-val cooccurs = authPairs.map(p => (p, 1)).reduceByKey(_+_)
-val coValues = cooccurs.map(x => (x._2,1)).reduceByKey(_+_)
+val coOccurs = authPairs.map(p => (p, 1)).reduceByKey(_+_)
+val coValues = coOccurs.map(x => (x._2,1)).reduceByKey(_+_)
 val coSorted = coValues.sortByKey(true).map(x => x._1 + "\t" + x._2)
 coSorted.saveAsTextFile("q2a")
 
@@ -87,7 +101,7 @@ uniqueHashes.size == uniqueAuths.size
 
   // Create edges from cooccurs RDD
 import org.apache.spark.graphx._
-val edges = cooccurs.map(p => {
+val edges = coOccurs.map(p => {
  val (auths, cnt) = p
  val ids = auths.map(hashId).sorted
  Edge(ids(0), ids(1),1)
@@ -116,59 +130,77 @@ singAuth.subtract(auth2).count()  // 45993 (correct)
   // Check in python and perhaps add 0s
 degrees.map(_._2).saveAsTextFile("check/degrees")
 
-// Q2d was incorrect in exam, double check wording and ensure distribution fit makes sense
+// Q2d just go for a big negative log, -9 with the Levy distribution did not work last time
 
 //// Q3
 
 // Add language to cooccurence tuples
-def lang_aCI(elem: Elem): Seq[(String)] = {
- val lang = elem\\ "Language"
+def langAuthors(elem: Elem): Seq[(String)] = {
+ val lang = elem \\ "Language"
  val auth = elem \\ "Author"
- val ln = auth \ "LastName"
- val fn = auth \ "ForeName"
- val nameTup = ln.map(_.text).zip(fn.map(_.text))
- val authList = nameTup.map(x=>(x._2 + " " + x._1).toUpperCase())
- lang.map(_.text) ++ authList
+ lang.map(_.text) ++ auth.map(_.toString)
 }
-val langAuth: RDD[Seq[String]] = mxml.map(lang_aCI)
+val langAuth = mxml.map(langAuthors)
 
-// Create an RDD filtered by each eligible language then follow the steps for triangle counting
-val langs = langAuth.map(x=>(x.head,1)).reduceByKey(_+_).filter(_._2>=1000)
-langs.collect()  // 11 languages
-
-val langList = langs.map(_._1).collect().toSeq
+val allLangs = langAuth.map(_.head).distinct.collect().toSeq
+allLangs.size
 
 var out = List("####")
+var i = 0
 
-for (l <- langList) {
+for (l <- allLangs) {
+  i = i+1
+  println(i + " " + l)
   var auths = langAuth.filter(x=>x.head==l).map(_.tail)
-  var aPairs = auths.flatMap(_.sorted.combinations(2))
-  var aCooc = aPairs.map(p => (p, 1)).reduceByKey(_+_)
-
-  var verts = auths.flatMap(x=>x).map(a=>(hashId(a),a))
-  var edges = aCooc.map(p => {
-   val (auths, cnt) = p
-   val ids = auths.map(hashId).sorted
-   Edge(ids(0), ids(1),1)
-  })
-  var aGraph = Graph(verts, edges)
-  aGraph.cache()
-
-  // Calculate clustering coefficients
-  var triCountGraph = aGraph.triangleCount()
-  // triCountGraph.vertices.map(x => x._2).stats()
-
-  var maxTrisGraph = aGraph.degrees.mapValues(d => d * (d - 1) / 2.0) // number of possible edges
-
-  var clusterCoefGraph = triCountGraph.vertices.innerJoin(maxTrisGraph) {
-   (vertexId, triCount, maxTris) => {
-    if (maxTris == 0) 0 else triCount / maxTris
+  
+  var langNames = auths.map{ arrList =>
+   arrList.map{ authXml =>
+    val lastNameRegEx = """<LastName>(.*)<.LastName>""".r
+    val lnMatched = lastNameRegEx.findFirstMatchIn(authXml)
+    val lastName = lnMatched match {
+     case Some(m) => m.group(1).toUpperCase()
+     case None => " "
+    }
+    val firstNameRegEx = """<ForeName>(.*)<.ForeName>""".r
+    val fnMatched = firstNameRegEx.findFirstMatchIn(authXml)
+    val firstName = fnMatched match {
+     case Some(m) => m.group(1).toUpperCase()
+     case None => " "
+    }
+    (lastName,firstName)
    }
   }
-  var result = l + ": " + (clusterCoefGraph.map(_._2).sum() / aGraph.vertices.count())   // average
-  println(result)
-  out = out ++ List(result)
 
+  var aPairs = langNames.flatMap(_.sorted.combinations(2))
+  var aCooc = aPairs.map(p => (p, 1)).reduceByKey(_+_)
+  var aCoocCount = aCooc.count
+  if(aCoocCount >= 1000) {
+    println(i + " " + l + ": " + aCoocCount)
+
+    var verts = langNames.flatMap(x=>x).map(a=>(hashId(a),a))
+    var edges = aCooc.map(p => {
+     val (auths, cnt) = p
+     val ids = auths.map(hashId).sorted
+     Edge(ids(0), ids(1),1)
+    })
+    var aGraph = Graph(verts, edges)
+    aGraph.cache()
+
+    // Calculate clustering coefficients
+    var triCountGraph = aGraph.triangleCount()
+    // triCountGraph.vertices.map(x => x._2).stats()
+
+    var maxTrisGraph = aGraph.degrees.mapValues(d => d * (d - 1) / 2.0) // number of possible edges
+
+    var clusterCoefGraph = triCountGraph.vertices.innerJoin(maxTrisGraph) {
+     (vertexId, triCount, maxTris) => {
+      if (maxTris == 0) 0 else triCount / maxTris
+     }
+    }
+    var result = l + ": " + (clusterCoefGraph.map(_._2).sum() / aGraph.vertices.count())   // average
+    println(result)
+    out = out ++ List(result)
+  }
   aGraph.unpersist()
 }
 out.foreach(println)
